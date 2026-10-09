@@ -35,8 +35,10 @@ button, input { font: inherit; color: inherit; }
 .card label { display: grid; gap: 6px; font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
 .card input { padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-hi); font-size: 16px;
               letter-spacing: 0; text-transform: none; font-weight: 500; }
-.card .go { margin-top: 14px; width: 100%; padding: 13px; border-radius: 12px; border: 0; background: var(--ink); color: var(--paper);
-            font-weight: 700; font-size: 15px; cursor: pointer; }
+.who-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 4px; }
+.who-pick button { padding: 16px 12px; border-radius: 12px; border: 0; background: var(--ink); color: var(--paper); cursor: pointer;
+                   font-weight: 700; font-size: 17px; display: grid; gap: 4px; }
+.who-pick button small { font-family: var(--mono); font-weight: 400; font-size: 11.5px; opacity: .8; }
 .card .small { margin-top: 12px; font-size: 12px; opacity: .85; line-height: 1.45; }
 
 /* ---------- header ---------- */
@@ -189,7 +191,7 @@ footer { background: var(--panel); border-top: 1px solid var(--line); padding: 8
 <div class="start" id="start">
   <div class="card">
     <h1>Clothes labelling</h1>
-    <div class="sub">VastraSense · 300 real phone photos of clothes</div>
+    <div class="sub">VastraSense · your 300 real phone photos of clothes · these labels teach the app's model</div>
     <ol>
       <li><b>Type:</b> choose the category, then the type of the main garment in the photo.</li>
       <li><b>Colour:</b> the colour that covers the largest area of the garment, as it would look in daylight. Add a
@@ -199,10 +201,9 @@ footer { background: var(--panel); border-top: 1px solid var(--line); padding: 8
       <li>If you cannot tell what the photo shows, press <b>Ambiguous photo</b> and save.</li>
       <li>Your answers are saved on this device as you go. When you stop, press <b>Send my labels</b> and send the file to Krishna.</li>
     </ol>
-    <label>Your name<input id="nameIn" autocomplete="given-name" placeholder="e.g. Somil"></label>
-    <button class="go" id="go">Start labelling</button>
+    <div class="who-pick" id="people"></div>
     <div class="small">Answer what <i>you</i> see; there are no hints on purpose. About 10 seconds a photo.
-      <br>Continuing on another device? Start, then use <b>Load</b> in the top bar with the file you sent earlier.</div>
+      <br>Continuing on another device? Pick your name, then use <b>Load</b> in the top bar with the file you sent earlier.</div>
   </div>
 </div>
 
@@ -273,8 +274,8 @@ footer { background: var(--panel); border-top: 1px solid var(--line); padding: 8
 
 <script>
 const $ = (id) => document.getElementById(id);
-const APP = "vastrasense-gold-labels-v1";
-let T = null, ITEMS = [], LABELS = {}, NAME = "", idx = 0, cur = null, slot = "colour", t0 = 0;
+const APP = "vastrasense-train-labels-v1";
+let T = null, ITEMS = [], IDS = new Set(), LABELS = {}, NAME = "", idx = 0, cur = null, slot = "colour", t0 = 0;
 const touch = window.matchMedia("(pointer: coarse)").matches;
 
 /* ---------- storage: this device only ---------- */
@@ -282,39 +283,42 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
 };
-const keyFor = (name) => "gold.labels." + name.trim().toLowerCase();
+const keyFor = (name) => "train.labels." + name.trim().toLowerCase();
 function persist() {
   if (!store.set(keyFor(NAME), LABELS)) toast("This browser is not saving: press Send my labels often");
 }
 
 async function boot() {
-  const [items, tax] = await Promise.all([fetch("items.json").then((r) => r.json()), fetch("taxonomy.json").then((r) => r.json())]);
-  ITEMS = items; T = tax;
-  buildSwatches(); buildStrip();
+  const [people, tax] = await Promise.all([fetch("people.json").then((r) => r.json()), fetch("taxonomy.json").then((r) => r.json())]);
+  T = tax;
+  buildSwatches();
   if (touch) { $("tipMain").textContent = "tap"; $("tipSecond").textContent = "tap box"; $("tipAlt").textContent = "tap box"; }
-  const last = store.get("gold.name", "");
-  if (last) $("nameIn").value = last;
-  $("go").onclick = start;
-  $("nameIn").addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
+  people.forEach((p) => {
+    const done = Object.keys(store.get(keyFor(p.name), {})).length;
+    const b = document.createElement("button");
+    b.innerHTML = `${p.name}<small>${done ? done + " of " + p.count + " done" : p.count + " photos"}</small>`;
+    b.onclick = () => start(p);
+    $("people").appendChild(b);
+  });
 }
-function start() {
-  const n = $("nameIn").value.trim();
-  if (!n) { $("nameIn").focus(); return; }
-  NAME = n;
-  store.set("gold.name", n);
-  LABELS = store.get(keyFor(n), {});
-  $("who").textContent = "· " + n;
+async function start(p) {
+  NAME = p.name;
+  ITEMS = await fetch(p.items).then((r) => r.json());
+  IDS = new Set(ITEMS.map((it) => it.id));
+  LABELS = store.get(keyFor(NAME), {});
+  buildStrip();
+  $("who").textContent = "· " + NAME;
   $("start").hidden = true;
-  const first = ITEMS.findIndex((it) => !LABELS[it.position]);
+  const first = ITEMS.findIndex((it) => !LABELS[it.id]);
   idx = first < 0 ? 0 : first;
   setMode(store.get("gold.colourMode", "swatches"));
   show();
 }
 
 function show() {
-  const it = ITEMS[idx], L = LABELS[it.position];
+  const it = ITEMS[idx], L = LABELS[it.id];
   cur = {
-    position: it.position,
+    id: it.id,
     category_l1: L ? L.category_l1 : null, category_l2: L ? L.category_l2 : null,
     colour: L ? L.colour : null, colour_secondary: L ? L.colour_secondary : null, colour_alt: L ? L.colour_alt : null,
     colour_hex: L ? L.colour_hex || null : null, colour_secondary_hex: L ? L.colour_secondary_hex || null : null,
@@ -329,8 +333,8 @@ function show() {
   img.onload = () => img.classList.add("ready");
   img.src = it.photo;
   $("fig").classList.remove("zoom");
-  $("pos").textContent = "#" + it.position;
-  $("where").textContent = (idx + 1) + " of " + ITEMS.length;
+  $("pos").textContent = "#" + (idx + 1);
+  $("where").textContent = "of " + ITEMS.length + " · photo " + it.id;
   $("note").value = cur.note;
   $("filter").value = ""; filterSwatches("");
   $("err").textContent = "";
@@ -366,13 +370,13 @@ function render() {
     el.classList.toggle("alt", cur.colour_alt === n);
   });
   $("amb").classList.toggle("on", cur.ambiguous);
-  const done = Object.keys(LABELS).length, sent = store.get("gold.sent." + NAME.toLowerCase(), 0);
+  const done = Object.keys(LABELS).length, sent = store.get("train.sent." + NAME.toLowerCase(), 0);
   $("count").textContent = done + " / " + ITEMS.length;
   $("bar").style.width = (100 * done / ITEMS.length) + "%";
   $("unsent").textContent = done > sent ? (done - sent) + " not sent yet" : (done ? "all sent" : "");
-  $("savedMark").classList.toggle("on", !!LABELS[ITEMS[idx].position]);
+  $("savedMark").classList.toggle("on", !!LABELS[ITEMS[idx].id]);
   document.querySelectorAll(".cell").forEach((c, i) => {
-    const x = LABELS[ITEMS[i].position];
+    const x = LABELS[ITEMS[i].id];
     c.className = "cell" + (x ? (x.ambiguous ? " amb" : " done") : "") + (i === idx ? " cur" : "");
   });
 }
@@ -418,9 +422,10 @@ function filterSwatches(q) {
 }
 function buildStrip() {
   const strip = $("strip");
+  strip.innerHTML = "";
   ITEMS.forEach((x, i) => {
     const c = document.createElement("div");
-    c.className = "cell"; c.title = "#" + x.position;
+    c.className = "cell"; c.title = "#" + (i + 1);
     c.onclick = () => { idx = i; show(); window.scrollTo({ top: 0, behavior: "smooth" }); };
     strip.appendChild(c);
   });
@@ -432,10 +437,10 @@ function save() {
     if (!cur.category_l1 || !cur.category_l2) { $("err").textContent = "Choose the category and the type (or mark the photo ambiguous)."; return; }
     if (!cur.colour) { $("err").textContent = "Choose the main colour (or mark the photo ambiguous)."; return; }
   }
-  LABELS[cur.position] = { ...cur, labeller: NAME, seconds: Math.round((performance.now() - t0) / 100) / 10,
-                           labelled_at: new Date().toISOString() };
+  LABELS[cur.id] = { ...cur, labeller: NAME, seconds: Math.round((performance.now() - t0) / 100) / 10,
+                     labelled_at: new Date().toISOString() };
   persist();
-  toast(`saved #${cur.position} · ${Object.keys(LABELS).length} / ${ITEMS.length}`);
+  toast(`saved #${idx + 1} · ${Object.keys(LABELS).length} / ${ITEMS.length}`);
   move(1);
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -446,7 +451,7 @@ function toast(text) { const t = $("toast"); t.textContent = text; t.classList.a
 async function sendLabels() {
   const n = Object.keys(LABELS).length;
   if (!n) { toast("Nothing to send yet"); return; }
-  const payload = { app: APP, labeller: NAME, exported_at: new Date().toISOString(), taxonomy: T.version, count: n, labels: LABELS };
+  const payload = { app: APP, set: "train", labeller: NAME, exported_at: new Date().toISOString(), taxonomy: T.version, count: n, labels: LABELS };
   const safe = NAME.replace(/[^A-Za-z0-9_-]+/g, "_") || "friend";
   const text = JSON.stringify(payload, null, 1);
   // Android Chrome's share sheet accepts text/plain files but not JSON, so share a .txt (JSON inside); download .json otherwise
@@ -462,7 +467,7 @@ async function sendLabels() {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     }
-    store.set("gold.sent." + NAME.toLowerCase(), n);
+    store.set("train.sent." + NAME.toLowerCase(), n);
     toast(`${n} labels ready to send: ${fname}`);
     render();
   } catch (e) {
@@ -477,11 +482,12 @@ $("loadFile").addEventListener("change", async (e) => {
   try {
     const data = JSON.parse(await f.text());
     if (data.app !== APP || !data.labels) throw new Error("not a labels file from this page");
+    if (data.labeller !== NAME) throw new Error(`this file is ${data.labeller}'s: pick ${data.labeller} on the start screen`);
     let added = 0;
-    for (const [p, l] of Object.entries(data.labels)) if (!LABELS[p]) { LABELS[p] = l; added++; }
+    for (const [p, l] of Object.entries(data.labels)) if (IDS.has(p) && !LABELS[p]) { LABELS[p] = l; added++; }
     persist();
     toast(`loaded ${added} labels from ${data.labeller}`);
-    const first = ITEMS.findIndex((it) => !LABELS[it.position]);
+    const first = ITEMS.findIndex((it) => !LABELS[it.id]);
     idx = first < 0 ? idx : first;
     show();
   } catch (err) { toast("Could not load: " + err.message); }
